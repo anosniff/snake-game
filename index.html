@@ -31,7 +31,7 @@
   }
 
   .overlay {
-    position: absolute; inset: 0;
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0; inset: 0;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 12px; padding: 16px; border-radius: 8px;
     background: rgba(2, 6, 23, .8);
@@ -70,7 +70,7 @@
 </style>
 </head>
 <body>
-<h1>🐍 贪吃蛇</h1>
+<h1>🐍 贪吃蛇 <span style="font-size:13px;color:#64748b;letter-spacing:1px">100×100</span></h1>
 <div class="stats">
   <span>得分<b id="score">0</b></span>
   <span>最高<b id="high">0</b></span>
@@ -141,14 +141,14 @@ bg.width = canvas.width; bg.height = canvas.height;
 // ============ 游戏状态 ============
 let snake, dir, dirQueue, food;
 let score, high, state;          // state: ready | playing | paused | over
-let rafId, lastTime, acc;
+let rafId, lastTime, acc, overAt = 0;
 
 try { high = +localStorage.getItem('snake100-high') || 0; } catch (e) { high = 0; }
 
 function reset() {
   const cx = COLS >> 1, cy = ROWS >> 1;
   snake = [];
-  for (let i = 3; i >= 0; i--) snake.push({ x: cx - i, y: cy });   // 初始 4 节，朝右
+  for (let i = 0; i < 4; i++) snake.push({ x: cx - i, y: cy });    // 初始 4 节，头部必须在前（snake[0] 是头）
   dir = { x: 1, y: 0 };
   dirQueue = [];
   score = 0;
@@ -204,6 +204,7 @@ function speedMs() {
 
 function gameOver(win) {
   state = 'over';
+  overAt = performance.now();
   beep(160, .35, 'sawtooth');
   const isRecord = score > high;
   if (isRecord) {
@@ -265,14 +266,16 @@ function draw() {
 
 // ============ 主循环 ============
 function frame(t) {
+  // 限制单帧时间差：切后台/锁屏回来时 rAF 时间戳会跳变，防止瞬间快进撞死
+  const dt = Math.min(t - lastTime, 200);
+  lastTime = t;
   if (state === 'playing') {
-    acc += t - lastTime;
+    acc += dt;
     while (acc >= speedMs() && state === 'playing') {
       acc -= speedMs();
       step();
     }
   }
-  lastTime = t;
   draw();
   rafId = requestAnimationFrame(frame);
 }
@@ -293,6 +296,10 @@ function resume() {
   if (state === 'paused') { state = 'playing'; lastTime = performance.now(); hideAllOverlays(); }
 }
 
+function canRestart() {
+  return state !== 'over' || performance.now() - overAt > 500;   // 死亡后 0.5s 冷却，防止连按误重开
+}
+
 function showOverlay(name) {
   document.getElementById('ov-start').classList.toggle('show', name === 'start');
   document.getElementById('ov-pause').classList.toggle('show', name === 'pause');
@@ -310,8 +317,7 @@ const DIRS = {
 };
 
 function setDir(d) {
-  if (state === 'ready' || state === 'over') { start(); }
-  if (state !== 'playing') return;
+  if (state !== 'playing') return;                  // 游戏结束后方向键不会误触重开
   const last = dirQueue.length ? dirQueue[dirQueue.length - 1] : dir;
   if (last.x === d.x && last.y === d.y) return;     // 去重
   if (dirQueue.length < 3) dirQueue.push(d);        // 最多缓存 3 步，高速时不丢操作
@@ -320,18 +326,26 @@ function setDir(d) {
 document.addEventListener('keydown', e => {
   if (DIRS[e.key]) {
     e.preventDefault();
+    if (state === 'ready') start();                // 方向键可直接开局
     setDir(DIRS[e.key]);
   } else if (e.key === ' ') {
     e.preventDefault();
-    if (state === 'ready' || state === 'over') start();
+    if (state === 'ready') start();
+    else if (state === 'over' && canRestart()) start();
     else if (state === 'playing') pause();
     else if (state === 'paused') resume();
   } else if (e.key === 'Enter') {
-    if (state === 'ready' || state === 'over') start();
+    e.preventDefault();                            // 防止误触焦点按钮重复触发
+    if (state === 'ready' || (state === 'over' && canRestart())) start();
   } else if (e.key === 'p' || e.key === 'P' || e.key === 'Escape') {
     if (state === 'playing') pause();
     else if (state === 'paused') resume();
   }
+});
+
+// 切后台/锁屏自动暂停，回来不会瞬间快进撞死
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) pause();
 });
 
 // 触屏滑动
@@ -340,7 +354,7 @@ canvas.addEventListener('touchstart', e => {
   const t = e.touches[0];
   tsx = t.clientX; tsy = t.clientY;
   e.preventDefault();
-  if (state === 'ready' || state === 'over') start();
+  if (state === 'ready' || (state === 'over' && canRestart())) start();
 }, { passive: false });
 canvas.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
 canvas.addEventListener('touchend', e => {
@@ -353,9 +367,9 @@ canvas.addEventListener('touchend', e => {
 });
 
 // 按钮
-document.getElementById('btn-start').addEventListener('click', start);
-document.getElementById('btn-resume').addEventListener('click', resume);
-document.getElementById('btn-restart').addEventListener('click', start);
+document.getElementById('btn-start').addEventListener('click', e => { start(); e.currentTarget.blur(); });
+document.getElementById('btn-resume').addEventListener('click', e => { resume(); e.currentTarget.blur(); });
+document.getElementById('btn-restart').addEventListener('click', e => { if (canRestart()) start(); e.currentTarget.blur(); });
 document.getElementById('up').addEventListener('click', e => { setDir(DIRS.ArrowUp); e.currentTarget.blur(); });
 document.getElementById('down').addEventListener('click', e => { setDir(DIRS.ArrowDown); e.currentTarget.blur(); });
 document.getElementById('left').addEventListener('click', e => { setDir(DIRS.ArrowLeft); e.currentTarget.blur(); });
